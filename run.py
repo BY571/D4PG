@@ -83,6 +83,7 @@ parser.add_argument("-nstep", type=int, default=1, help ="Nstep bootstrapping, d
 parser.add_argument("-dueling", type=int, choices=[0,1], default=0, help="Dueling Q-Network, default = 0")
 parser.add_argument("-per", type=int, default=0, choices=[0,1], help="Adding Priorizied Experience Replay to the agent if set to 1, default = 0")
 parser.add_argument("-munchausen", type=int, default=0, choices=[0,1], help="Adding Munchausen RL to the agent if set to 1, default = 0")
+parser.add_argument("-noise", type=str, choices=["OU", "GA"], default="OU", help="Choose noise type: OU = OU-Noise, GA = Gaussian noise, default OU")
 parser.add_argument("-info", type=str, help="Information or name of the run")
 parser.add_argument("-d2rl", type=int, choices=[0,1], default=0, help="Uses Deep Actor and Deep Critic Networks if set to 1 as described in the D2RL Paper: https://arxiv.org/pdf/2010.09163.pdf, default=0")
 parser.add_argument("-frames", type=int, default=10000, help="The amount of training interactions with the environment, default is 100000")
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     state_size = eval_env.observation_space.shape[0]
     action_size = eval_env.action_space.shape[0]
     agent = Agent(state_size=state_size, action_size=action_size, n_step=args.nstep, per=args.per, munchausen=args.munchausen,
-                 D2RL=D2RL, random_seed=seed, hidden_size=HIDDEN_SIZE, BATCH_SIZE=BATCH_SIZE, BUFFER_SIZE=BUFFER_SIZE, GAMMA=GAMMA,
+                 D2RL=D2RL, noise_type=args.noise, random_seed=seed, hidden_size=HIDDEN_SIZE, BATCH_SIZE=BATCH_SIZE, BUFFER_SIZE=BUFFER_SIZE, GAMMA=GAMMA,
                  LR_ACTOR=LR_ACTOR, LR_CRITIC=LR_CRITIC, TAU=TAU, LEARN_EVERY=args.learn_every, LEARN_NUMBER=args.learn_number, device=device, ) 
     
     t0 = time.time()

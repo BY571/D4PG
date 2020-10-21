@@ -32,7 +32,7 @@ class Actor(nn.Module):
         super(Actor, self).__init__()
         self.seed = torch.manual_seed(seed)
         self.fc1 = nn.Linear(state_size, hidden_size)
-        self.batch_norm = nn.BatchNorm1d(hidden_size)
+        #self.batch_norm = nn.BatchNorm1d(hidden_size) ## seems to improve the final performance a lot
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, action_size)
         self.reset_parameters()
@@ -44,7 +44,7 @@ class Actor(nn.Module):
 
     def forward(self, state):
         """Build an actor (policy) network that maps states -> actions."""
-        x = torch.relu(self.batch_norm(self.fc1(state)))
+        x = torch.relu(self.fc1(state)) #self.batch_norm
         x = torch.relu(self.fc2(x))
         return torch.tanh(self.fc3(x))
 
@@ -65,7 +65,7 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         self.seed = torch.manual_seed(seed)
         self.fcs1 = nn.Linear(state_size, hidden_size)
-        self.batch_norm = nn.BatchNorm1d(hidden_size)
+        #self.batch_norm = nn.BatchNorm1d(hidden_size)
         self.fc2 = nn.Linear(hidden_size+action_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, 1)
         self.reset_parameters()
@@ -77,7 +77,7 @@ class Critic(nn.Module):
 
     def forward(self, state, action):
         """Build a critic (value) network that maps (state, action) pairs -> Q-values."""
-        xs = F.relu(self.batch_norm(self.fcs1(state)))
+        xs = F.relu(self.fcs1(state)) # self.batch_norm
         x = torch.cat((xs, action), dim=1)
         x = F.relu(self.fc2(x))
         return self.fc3(x)

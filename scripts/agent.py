@@ -8,6 +8,9 @@ import numpy as np
 import random
 import copy
 
+# TODO: Check for batch norm comparison! batch norm seems to have a big impact on final performance
+#       Also check if normal gaussian noise is enough. -> D4PG paper says there is no difference maybe chooseable parameter for the implementation
+
 class Agent():
     """Interacts with and learns from the environment."""
     
@@ -17,6 +20,7 @@ class Agent():
                       per, 
                       munchausen,
                       D2RL,
+                      noise_type,
                       random_seed,
                       hidden_size,
                       BUFFER_SIZE = int(1e6),  # replay buffer size
@@ -69,8 +73,12 @@ class Agent():
         print("\nCritic: \n", self.critic_local)
         
         # Noise process
-        self.noise = OUNoise(action_size, random_seed)
-        self.epsilon = EPSILON
+        self.noise_type = noise_type
+        if noise_type == "OU":
+            self.noise = OUNoise(action_size, random_seed)
+            self.epsilon = EPSILON
+        else:
+            self.epsilon = 0.3
         # Replay memory
         self.memory = ReplayBuffer( BUFFER_SIZE, BATCH_SIZE, n_step=n_step, device=device, seed=random_seed, gamma=GAMMA)
         
@@ -96,7 +104,10 @@ class Agent():
             action = self.actor_local(state).cpu().data.numpy().squeeze(0)
         self.actor_local.train()
         if add_noise:
-            action += self.noise.sample() * self.epsilon
+            if self.noise_type == "OU":
+                action += self.noise.sample() * self.epsilon
+            else:
+                action += self.epsilon * np.random.normal(0, scale=1)
         return action #np.clip(action, -1, 1)
 
     def reset(self):
@@ -121,7 +132,7 @@ class Agent():
         actions_next = self.actor_target(next_states.to(self.device))
         Q_targets_next = self.critic_target(next_states.to(self.device), actions_next.to(self.device))
         # Compute Q targets for current states (y_i)
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
+        Q_targets = rewards + (gamma**self.n_step * Q_targets_next * (1 - dones))
         # Compute critic loss
         Q_expected = self.critic_local(states, actions)
         critic_loss = F.mse_loss(Q_expected, Q_targets)
@@ -145,8 +156,9 @@ class Agent():
         self.soft_update(self.actor_local, self.actor_target)                     
         
         # ----------------------- update epsilon and noise ----------------------- #
-        self.epsilon *= self.EPSILON_DECAY
-        self.noise.reset()
+        #self.epsilon *= self.EPSILON_DECAY
+        
+        if self.noise_type == "OU": self.noise.reset()
     
     def soft_update(self, local_model, target_model):
         """Soft update model parameters.
