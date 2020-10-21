@@ -54,7 +54,7 @@ class ReplayBuffer:
         next_states = torch.from_numpy(np.stack([e.next_state for e in experiences if e is not None])).float().to(self.device)
         dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(self.device)
 
-        return (states, actions, rewards, next_states, dones)
+        return (states, actions, rewards, next_states, dones, None, None)
 
     def __len__(self):
         """Return the current size of internal memory."""
@@ -65,7 +65,7 @@ class PrioritizedReplay(object):
     """
     Proportional Prioritization
     """
-    def __init__(self, capacity, batch_size, device, seed, gamma=0.99, alpha=0.6, beta_start = 0.4, beta_frames=100000):
+    def __init__(self, capacity, batch_size, device, seed, gamma=0.99, n_step=1, alpha=0.6, beta_start = 0.4, beta_frames=100000):
         self.alpha = alpha
         self.beta_start = beta_start
         self.beta_frames = beta_frames
@@ -73,13 +73,20 @@ class PrioritizedReplay(object):
         self.frame = 1 #for beta calculation
         self.batch_size = batch_size
         self.capacity   = capacity
-        self.buffer     = []
+        self.buffer     = deque(maxlen=capacity)
         self.pos        = 0
-        self.priorities = np.zeros((capacity,), dtype=np.float32)
+        self.priorities = deque(maxlen=capacity)
         self.seed = np.random.seed(seed)
-        self.n_step_buffer = [deque(maxlen=1) for i in range(parallel_env)]
-        self.iter_ = 0
+        self.n_step_buffer = deque(maxlen=n_step)
+        self.n_step = n_step
         self.gamma = gamma
+
+    def calc_multistep_return(self,n_step_buffer):
+        Return = 0
+        for idx in range(self.n_step):
+            Return += self.gamma**idx * n_step_buffer[idx][2]
+        
+        return n_step_buffer[0][0], n_step_buffer[0][1], Return, n_step_buffer[-1][3], n_step_buffer[-1][4]
 
     def beta_by_frame(self, frame_idx):
         """
@@ -97,25 +104,24 @@ class PrioritizedReplay(object):
         state      = np.expand_dims(state, 0)
         next_state = np.expand_dims(next_state, 0)
         action = torch.from_numpy(action)
-        max_prio = self.priorities.max() if self.buffer else 1.0 # gives max priority if buffer is not empty else 1
+
+        # n_step calc
+        self.n_step_buffer.append((state, action, reward, next_state, done))
+        if len(self.n_step_buffer) == self.n_step:
+            state, action, reward, next_state, done = self.calc_multistep_return(self.n_step_buffer)
+
+        max_prio = np.array(self.priorities, dtype=float).max() if self.buffer else 1.0 # gives max priority if buffer is not empty else 1
         
-        if len(self.buffer) < self.capacity:
-            self.buffer.append((state, action, reward, next_state, done))
-        else:
-            # puts the new data on the position of the oldes since it circles via pos variable
-            # since if len(buffer) == capacity -> pos == 0 -> oldest memory (at least for the first round?) 
-            self.buffer[self.pos] = (state, action, reward, next_state, done) 
-        
-        self.priorities[self.pos] = max_prio
-        self.pos = (self.pos + 1) % self.capacity # lets the pos circle in the ranges of capacity if pos+1 > cap --> new posi = 0
+
+        self.buffer.append((state, action, reward, next_state, done))
+        self.priorities.append(max_prio)
+
 
         
     def sample(self):
         N = len(self.buffer)
-        if N == self.capacity:
-            prios = self.priorities
-        else:
-            prios = self.priorities[:self.pos]
+        prios = np.array(self.priorities, dtype=float)
+        assert N == len(prios)
             
         # calc P = p^a/sum(p^a)
         probs  = prios ** self.alpha
@@ -126,10 +132,11 @@ class PrioritizedReplay(object):
         samples = [self.buffer[idx] for idx in indices]
         
         beta = self.beta_by_frame(self.frame)
+        #print(beta)
         self.frame+=1
                 
         #Compute importance-sampling weight
-        weights  = (N * P[indices]) ** (-beta)
+        weights  = (N * P[indices])**(-beta)
         # normalize weights
         weights /= weights.max() 
         weights  = np.array(weights, dtype=np.float32) 
@@ -142,7 +149,13 @@ class PrioritizedReplay(object):
         rewards     = torch.FloatTensor(rewards).to(self.device).unsqueeze(1) 
         dones       = torch.FloatTensor(dones).to(self.device).unsqueeze(1)
         weights    = torch.FloatTensor(weights).unsqueeze(1)
-
+        #print("s",states.shape)
+        #print("ns", next_states.shape)
+        #print("a", actions.shape)
+        #print("r", rewards.shape)
+        #print("d", dones.shape)
+        #print("w", weights.shape)
+        
         return states, actions, rewards, next_states, dones, indices, weights
     
 

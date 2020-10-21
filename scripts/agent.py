@@ -34,7 +34,8 @@ class Agent():
                       LEARN_NUMBER = 1,
                       EPSILON = 1.0,
                       EPSILON_DECAY = 1,
-                      device = "cuda"
+                      device = "cuda",
+                      frames = 100000
                       ):
         """Initialize an Agent object.
         
@@ -48,6 +49,7 @@ class Agent():
         self.action_size = action_size
         self.BUFFER_SIZE = BUFFER_SIZE
         self.BATCH_SIZE = BATCH_SIZE
+        self.per = per
         self.n_step =n_step
         self.GAMMA = GAMMA
         self.TAU = TAU
@@ -74,16 +76,22 @@ class Agent():
         
         # Noise process
         self.noise_type = noise_type
-        if noise_type == "OU":
+        if noise_type == "ou":
             self.noise = OUNoise(action_size, random_seed)
             self.epsilon = EPSILON
         else:
             self.epsilon = 0.3
+        print("Use Noise: ", noise_type)
         # Replay memory
-        self.memory = ReplayBuffer( BUFFER_SIZE, BATCH_SIZE, n_step=n_step, device=device, seed=random_seed, gamma=GAMMA)
-        
+        if per:
+            self.memory = PrioritizedReplay(BUFFER_SIZE, BATCH_SIZE, device=device, seed=random_seed, gamma=GAMMA, n_step=n_step, beta_frames=frames)
 
-    def step(self, state, action, reward, next_state, done, timestamp):
+        else:
+            self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, n_step=n_step, device=device, seed=random_seed, gamma=GAMMA)
+
+        print("Using PER: ", per)    
+
+    def step(self, state, action, reward, next_state, done, timestamp, writer):
         """Save experience in replay memory, and use random sample from buffer to learn."""
         # Save experience / reward
         self.memory.add(state, action, reward, next_state, done)
@@ -92,7 +100,10 @@ class Agent():
         if len(self.memory) > self.BATCH_SIZE and timestamp % self.LEARN_EVERY == 0:
             for _ in range(self.LEARN_NUMBER):
                 experiences = self.memory.sample()
-                self.learn(experiences, self.GAMMA)
+                
+                losses = self.learn(experiences, self.GAMMA)
+            writer.add_scalar("Critic_loss", losses[0], timestamp)
+            writer.add_scalar("Actor_loss", losses[1], timestamp)
 
     def act(self, state, add_noise=True):
         """Returns actions for given state as per current policy."""
@@ -104,7 +115,7 @@ class Agent():
             action = self.actor_local(state).cpu().data.numpy().squeeze(0)
         self.actor_local.train()
         if add_noise:
-            if self.noise_type == "OU":
+            if self.noise_type == "ou":
                 action += self.noise.sample() * self.epsilon
             else:
                 action += self.epsilon * np.random.normal(0, scale=1)
@@ -125,17 +136,22 @@ class Agent():
             experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
             gamma (float): discount factor
         """
-        states, actions, rewards, next_states, dones = experiences
+        states, actions, rewards, next_states, dones, idx, weights = experiences
 
         # ---------------------------- update critic ---------------------------- #
         # Get predicted next-state actions and Q values from target models
-        actions_next = self.actor_target(next_states.to(self.device))
-        Q_targets_next = self.critic_target(next_states.to(self.device), actions_next.to(self.device))
-        # Compute Q targets for current states (y_i)
-        Q_targets = rewards + (gamma**self.n_step * Q_targets_next * (1 - dones))
+        with torch.no_grad():
+            actions_next = self.actor_target(next_states.to(self.device))
+            Q_targets_next = self.critic_target(next_states.to(self.device), actions_next.to(self.device))
+            # Compute Q targets for current states (y_i)
+            Q_targets = rewards + (gamma**self.n_step * Q_targets_next * (1 - dones))
         # Compute critic loss
         Q_expected = self.critic_local(states, actions)
-        critic_loss = F.mse_loss(Q_expected, Q_targets)
+        if self.per:
+            td_error =  Q_targets - Q_expected
+            critic_loss = (td_error.pow(2)*weights.to(self.device)).mean().to(self.device)
+        else:
+            critic_loss = F.mse_loss(Q_expected, Q_targets)
         # Minimize the loss
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -154,11 +170,15 @@ class Agent():
         # ----------------------- update target networks ----------------------- #
         self.soft_update(self.critic_local, self.critic_target)
         self.soft_update(self.actor_local, self.actor_target)                     
-        
+        if self.per:
+            self.memory.update_priorities(idx, np.clip(abs(td_error.data.cpu().numpy()),-1,1))
         # ----------------------- update epsilon and noise ----------------------- #
-        #self.epsilon *= self.EPSILON_DECAY
         
-        if self.noise_type == "OU": self.noise.reset()
+        self.epsilon *= self.EPSILON_DECAY
+        
+        if self.noise_type == "ou": self.noise.reset()
+        return critic_loss.detach().cpu().numpy(), actor_loss.detach().cpu().numpy()
+
     
     def soft_update(self, local_model, target_model):
         """Soft update model parameters.

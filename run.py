@@ -57,7 +57,7 @@ def run(frames=1000, eval_every=1000, eval_runs=5, worker=1):
         action_v = np.clip(action*action_high, action_low, action_high)
         next_state, reward, done, _ = env.step(action_v) #returns np.stack(obs), np.stack(action) ...
 
-        agent.step(state, action, reward, next_state, done, frame)
+        agent.step(state, action, reward, next_state, done, frame, writer)
         
         state = next_state
         score += reward
@@ -83,10 +83,10 @@ parser.add_argument("-nstep", type=int, default=1, help ="Nstep bootstrapping, d
 parser.add_argument("-dueling", type=int, choices=[0,1], default=0, help="Dueling Q-Network, default = 0")
 parser.add_argument("-per", type=int, default=0, choices=[0,1], help="Adding Priorizied Experience Replay to the agent if set to 1, default = 0")
 parser.add_argument("-munchausen", type=int, default=0, choices=[0,1], help="Adding Munchausen RL to the agent if set to 1, default = 0")
-parser.add_argument("-noise", type=str, choices=["OU", "GA"], default="OU", help="Choose noise type: OU = OU-Noise, GA = Gaussian noise, default OU")
+parser.add_argument("-noise", type=str, choices=["ou", "gauss"], default="OU", help="Choose noise type: ou = OU-Noise, gauss = Gaussian noise, default ou")
 parser.add_argument("-info", type=str, help="Information or name of the run")
 parser.add_argument("-d2rl", type=int, choices=[0,1], default=0, help="Uses Deep Actor and Deep Critic Networks if set to 1 as described in the D2RL Paper: https://arxiv.org/pdf/2010.09163.pdf, default=0")
-parser.add_argument("-frames", type=int, default=10000, help="The amount of training interactions with the environment, default is 100000")
+parser.add_argument("-frames", type=int, default=20000, help="The amount of training interactions with the environment, default is 100000")
 parser.add_argument("-eval_every", type=int, default=1000, help="Number of interactions after which the evaluation runs are performed, default = 1000")
 parser.add_argument("-eval_runs", type=int, default=1, help="Number of evaluation runs performed, default = 1")
 parser.add_argument("-seed", type=int, default=0, help="Seed for the env and torch network weights, default is 0")
@@ -97,7 +97,7 @@ parser.add_argument("-learn_number", type=int, default=1, help="Learn x times pe
 parser.add_argument("-layer_size", type=int, default=256, help="Number of nodes per neural network layer, default is 256")
 parser.add_argument("-repm", "--replay_memory", type=int, default=int(1e6), help="Size of the Replay memory, default is 1e6")
 parser.add_argument("-bs", "--batch_size", type=int, default=256, help="Batch size, default is 256")
-parser.add_argument("-t", "--tau", type=float, default=1e-2, help="Softupdate factor tau, default is 1e-2")
+parser.add_argument("-t", "--tau", type=float, default=1e-2, help="Softupdate factor tau, default is 1e-3") #for per 1e-2 for regular 1e-3 -> Pendulum!
 parser.add_argument("-g", "--gamma", type=float, default=0.99, help="discount factor gamma, default is 0.99")
 parser.add_argument("--saved_model", type=str, default=None, help="Load a saved model to perform a test run!")
 parser.add_argument("-w", "--worker", type=int, default=1, help="Number of parallel worker, default = 1")
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     action_size = eval_env.action_space.shape[0]
     agent = Agent(state_size=state_size, action_size=action_size, n_step=args.nstep, per=args.per, munchausen=args.munchausen,
                  D2RL=D2RL, noise_type=args.noise, random_seed=seed, hidden_size=HIDDEN_SIZE, BATCH_SIZE=BATCH_SIZE, BUFFER_SIZE=BUFFER_SIZE, GAMMA=GAMMA,
-                 LR_ACTOR=LR_ACTOR, LR_CRITIC=LR_CRITIC, TAU=TAU, LEARN_EVERY=args.learn_every, LEARN_NUMBER=args.learn_number, device=device, ) 
+                 LR_ACTOR=LR_ACTOR, LR_CRITIC=LR_CRITIC, TAU=TAU, LEARN_EVERY=args.learn_every, LEARN_NUMBER=args.learn_number, device=device, frames=args.frames) 
     
     t0 = time.time()
     if saved_model != None:
