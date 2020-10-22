@@ -10,6 +10,7 @@ Added already:
 TODO:
 - add munchausen RL
 - test runs for Pendulum and LunarLanderContinuous
+- compare critic loss of base and iqn agent!
 
 Notes:
 

@@ -245,8 +245,7 @@ class Agent():
             quantil_l = abs(taus -(td_error.detach() < 0).float()) * huber_l / 1.0
             
             if self.per:
-                td_error =  Q_targets - Q_expected
-                critic_loss = quantil_l.sum(dim=1).mean(dim=1)*weights.to(self.device).mean()
+                critic_loss = (quantil_l.sum(dim=1).mean(dim=1, keepdim=True)*weights.to(self.device)).mean()
             else:
                 critic_loss = quantil_l.sum(dim=1).mean(dim=1).mean()
             # Minimize the loss
@@ -268,7 +267,7 @@ class Agent():
             self.soft_update(self.critic_local, self.critic_target)
             self.soft_update(self.actor_local, self.actor_target)                     
             if self.per:
-                self.memory.update_priorities(idx, np.clip(abs(td_error.data.cpu().numpy()),-1,1))
+                self.memory.update_priorities(idx, np.clip(abs(td_error.sum(dim=1).mean(dim=1,keepdim=True).data.cpu().numpy()),-1,1))
             # ----------------------- update epsilon and noise ----------------------- #
             
             self.epsilon *= self.EPSILON_DECAY
