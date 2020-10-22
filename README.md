@@ -8,6 +8,7 @@ Added already:
 - Distributional IQN Critic
 
 TODO:
+- add munchausen RL
 - test runs for Pendulum and LunarLanderContinuous
 
 Notes:
