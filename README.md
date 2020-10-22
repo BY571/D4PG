@@ -5,12 +5,10 @@ Added already:
 - Prioritized Experience Replay
 - N-Step Bootstrapping
 - D2RL
+- Distributional IQN Critic
 
-Todo:
-- Distributional RL FQF
-- Dueling Head
-
-
+TODO:
+- test runs for Pendulum and LunarLanderContinuous
 
 Notes:
 

@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
-from .networks import Actor, Critic
+from .networks import Actor, Critic, DeepActor, DeepCritic, IQN
 from .replay_buffer import ReplayBuffer, PrioritizedReplay
 import numpy as np
 import random
@@ -19,6 +19,7 @@ class Agent():
                       n_step,
                       per, 
                       munchausen,
+                      distributional,
                       D2RL,
                       noise_type,
                       random_seed,
@@ -50,7 +51,9 @@ class Agent():
         self.BUFFER_SIZE = BUFFER_SIZE
         self.BATCH_SIZE = BATCH_SIZE
         self.per = per
+        self.munchausen = False
         self.n_step =n_step
+        self.distributional = distributional
         self.GAMMA = GAMMA
         self.TAU = TAU
         self.LEARN_EVERY = LEARN_EVERY
@@ -58,22 +61,29 @@ class Agent():
         self.EPSILON_DECAY = EPSILON_DECAY
         self.device = device
         self.seed = random.seed(random_seed)
+        # distributional Values
+        self.N = 32
+        self.entropy_coeff = 0.001
         
         print("Using: ", device)
         
         # Actor Network (w/ Target Network)
-        self.actor_local = Actor(state_size, action_size, random_seed).to(device)
-        self.actor_target = Actor(state_size, action_size, random_seed).to(device)
+        self.actor_local = Actor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
+        self.actor_target = Actor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
         self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=LR_ACTOR)
 
         # Critic Network (w/ Target Network)
-        self.critic_local = Critic(state_size, action_size, random_seed).to(device)
-        self.critic_target = Critic(state_size, action_size, random_seed).to(device)
+        if self.distributional:
+            self.critic_local = IQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
+            self.critic_target = IQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
+        else:
+            self.critic_local = Critic(state_size, action_size, random_seed).to(device)
+            self.critic_target = Critic(state_size, action_size, random_seed).to(device)
         self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=LR_CRITIC, weight_decay=WEIGHT_DECAY)
 
         print("Actor: \n", self.actor_local)
         print("\nCritic: \n", self.critic_local)
-        
+
         # Noise process
         self.noise_type = noise_type
         if noise_type == "ou":
@@ -88,6 +98,11 @@ class Agent():
 
         else:
             self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, n_step=n_step, device=device, seed=random_seed, gamma=GAMMA)
+        
+        if distributional:
+            self.learn = self.learn_distribution
+        else:
+            self.learn = self.learn_
 
         print("Using PER: ", per)    
 
@@ -112,7 +127,7 @@ class Agent():
         assert state.shape == (1,3), "shape: {}".format(state.shape)
         self.actor_local.eval()
         with torch.no_grad():
-            action = self.actor_local(state).cpu().data.numpy().squeeze(0)
+                action = self.actor_local(state).cpu().data.numpy().squeeze(0)
         self.actor_local.train()
         if add_noise:
             if self.noise_type == "ou":
@@ -124,7 +139,7 @@ class Agent():
     def reset(self):
         self.noise.reset()
 
-    def learn(self, experiences, gamma):
+    def learn_(self, experiences, gamma):
         """Update policy and value parameters using given batch of experience tuples.
         Q_targets = r + γ * critic_target(next_state, actor_target(next_state))
         where:
@@ -193,6 +208,80 @@ class Agent():
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(self.TAU*local_param.data + (1.0-self.TAU)*target_param.data)
 
+
+    def learn_distribution(self, experiences, gamma):
+            """Update policy and value parameters using given batch of experience tuples.
+            Q_targets = r + γ * critic_target(next_state, actor_target(next_state))
+            where:
+                actor_target(state) -> action
+                critic_target(state, action) -> Q-value
+
+            Params
+            ======
+                experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
+                gamma (float): discount factor
+            """
+            states, actions, rewards, next_states, dones, idx, weights = experiences
+
+            # ---------------------------- update critic ---------------------------- #
+            # Get predicted next-state actions and Q values from target models
+
+            # Get max predicted Q values (for next states) from target model
+            with torch.no_grad():
+                next_actions = self.actor_local(next_states)
+                Q_targets_next, _ = self.critic_target(next_states, next_actions, self.N)
+                Q_targets_next = Q_targets_next.transpose(1,2)
+            # Compute Q targets for current states 
+            Q_targets = rewards.unsqueeze(-1) + (self.GAMMA**self.n_step * Q_targets_next.to(self.device) * (1. - dones.unsqueeze(-1)))
+            # Get expected Q values from local model
+            Q_expected, taus = self.critic_local(states, actions, self.N)
+            assert Q_targets.shape == (self.BATCH_SIZE, 1, self.N)
+            assert Q_expected.shape == (self.BATCH_SIZE, self.N, 1)
+
+            # Quantile Huber loss
+            td_error = Q_targets - Q_expected
+            assert td_error.shape == (self.BATCH_SIZE, self.N, self.N), "wrong td error shape"
+            huber_l = calculate_huber_loss(td_error, 1.0)
+            quantil_l = abs(taus -(td_error.detach() < 0).float()) * huber_l / 1.0
+            
+            if self.per:
+                td_error =  Q_targets - Q_expected
+                critic_loss = quantil_l.sum(dim=1).mean(dim=1)*weights.to(self.device).mean()
+            else:
+                critic_loss = quantil_l.sum(dim=1).mean(dim=1).mean()
+            # Minimize the loss
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            clip_grad_norm_(self.critic_local.parameters(), 1)
+            self.critic_optimizer.step()
+
+            # ---------------------------- update actor ---------------------------- #
+            # Compute actor loss
+            actions_pred = self.actor_local(states)
+            actor_loss = -self.critic_local.get_qvalues(states, actions_pred).mean()
+            # Minimize the loss
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.actor_optimizer.step()
+
+            # ----------------------- update target networks ----------------------- #
+            self.soft_update(self.critic_local, self.critic_target)
+            self.soft_update(self.actor_local, self.actor_target)                     
+            if self.per:
+                self.memory.update_priorities(idx, np.clip(abs(td_error.data.cpu().numpy()),-1,1))
+            # ----------------------- update epsilon and noise ----------------------- #
+            
+            self.epsilon *= self.EPSILON_DECAY
+            
+            if self.noise_type == "ou": self.noise.reset()
+            return critic_loss.detach().cpu().numpy(), actor_loss.detach().cpu().numpy()
+
+        
+
+
+
+
+
 class OUNoise:
     """Ornstein-Uhlenbeck process."""
 
@@ -214,3 +303,26 @@ class OUNoise:
         dx = self.theta * (self.mu - x) + self.sigma * np.array([random.random() for i in range(len(x))])
         self.state = x + dx
         return self.state
+
+def calc_fraction_loss(FZ_,FZ, taus, weights=None):
+    """calculate the loss for the fraction proposal network """
+    
+    gradients1 = FZ - FZ_[:, :-1]
+    gradients2 = FZ - FZ_[:, 1:] 
+    flag_1 = FZ > torch.cat([FZ_[:, :1], FZ[:, :-1]], dim=1)
+    flag_2 = FZ < torch.cat([FZ[:, 1:], FZ_[:, -1:]], dim=1)
+    gradients = (torch.where(flag_1, gradients1, - gradients1) + torch.where(flag_2, gradients2, -gradients2)).view(taus.shape[0], 31)
+    assert not gradients.requires_grad
+    if weights != None:
+        loss = ((gradients * taus[:, 1:-1]).sum(dim=1)*weights).mean()
+    else:
+        loss = (gradients * taus[:, 1:-1]).sum(dim=1).mean()
+    return loss 
+    
+def calculate_huber_loss(td_errors, k=1.0):
+    """
+    Calculate huber loss element-wisely depending on kappa k.
+    """
+    loss = torch.where(td_errors.abs() <= k, 0.5 * td_errors.pow(2), k * (td_errors.abs() - 0.5 * k))
+    assert loss.shape == (td_errors.shape[0], 32, 32), "huber loss has wrong shape"
+    return loss
