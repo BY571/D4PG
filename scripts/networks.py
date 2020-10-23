@@ -97,9 +97,9 @@ class IQN(nn.Module):
 
         # Network Architecture
 
-        self.head = nn.Linear(self.input_shape, layer_size) 
+        self.head = nn.Linear(self.action_size+self.input_shape, layer_size) 
         self.cos_embedding = nn.Linear(self.n_cos, layer_size)
-        self.ff_1 = nn.Linear(self.action_size+layer_size, layer_size)
+        self.ff_1 = nn.Linear(layer_size, layer_size)
         self.ff_2 = nn.Linear(layer_size, 1)    
         #weight_init([self.head_1, self.ff_1])
 
@@ -128,19 +128,19 @@ class IQN(nn.Module):
         
         """
         batch_size = input.shape[0]
+        x = torch.cat((input, action), dim=1)
+        x = torch.relu(self.head(x))
         
-        x = torch.relu(self.head(input))
-        #x = torch.cat((x, action), dim=1)
         cos, taus = self.calc_cos(batch_size, num_tau) # cos shape (batch, num_tau, layer_size)
         cos = cos.view(batch_size*num_tau, self.n_cos)
         cos_x = torch.relu(self.cos_embedding(cos)).view(batch_size, num_tau, self.layer_size) # (batch, n_tau, layer)
         
         # x has shape (batch, layer_size) for multiplication –> reshape to (batch, 1, layer)
         x = (x.unsqueeze(1)*cos_x).view(batch_size*num_tau, self.layer_size)  #batch_size*num_tau, self.cos_layer_out
-        action = action.repeat(num_tau,1).reshape(num_tau,batch_size*self.action_size).transpose(0,1).reshape(batch_size*num_tau,self.action_size)
-        x = torch.cat((x,action),dim=1)
+        #action = action.repeat(num_tau,1).reshape(num_tau,batch_size*self.action_size).transpose(0,1).reshape(batch_size*num_tau,self.action_size)
+        #x = torch.cat((x,action),dim=1)
         x = torch.relu(self.ff_1(x))
-        #x = torch.relu(self.ff_2(x))
+
         out = self.ff_2(x)
         
         return out.view(batch_size, num_tau, 1), taus
