@@ -51,7 +51,7 @@ class Agent():
         self.BUFFER_SIZE = BUFFER_SIZE
         self.BATCH_SIZE = BATCH_SIZE
         self.per = per
-        self.munchausen = False
+        self.munchausen = munchausen
         self.n_step =n_step
         self.distributional = distributional
         self.GAMMA = GAMMA
@@ -64,6 +64,10 @@ class Agent():
         # distributional Values
         self.N = 32
         self.entropy_coeff = 0.001
+        # munchausen values
+        self.entropy_tau = 0.03
+        self.lo = -1
+        self.alpha = 0.9
         
         print("Using: ", device)
         
@@ -154,12 +158,38 @@ class Agent():
         states, actions, rewards, next_states, dones, idx, weights = experiences
 
         # ---------------------------- update critic ---------------------------- #
-        # Get predicted next-state actions and Q values from target models
-        with torch.no_grad():
-            actions_next = self.actor_target(next_states.to(self.device))
-            Q_targets_next = self.critic_target(next_states.to(self.device), actions_next.to(self.device))
-            # Compute Q targets for current states (y_i)
-            Q_targets = rewards + (gamma**self.n_step * Q_targets_next * (1 - dones))
+        if not self.munchausen:
+            # Get predicted next-state actions and Q values from target models
+            with torch.no_grad():
+                actions_next = self.actor_target(next_states.to(self.device))
+                Q_targets_next = self.critic_target(next_states.to(self.device), actions_next.to(self.device))
+                # Compute Q targets for current states (y_i)
+                Q_targets = rewards + (gamma**self.n_step * Q_targets_next * (1 - dones))
+        else:
+            with torch.no_grad():
+                actions_next = self.actor_target(next_states.to(self.device))
+                q_t_n = self.critic_target(next_states.to(self.device), actions_next.to(self.device))
+                # calculate log-pi - in the paper they subtracted the max_Q value from the Q to ensure stability since we only predict the max value we dont do that
+                # this might cause some instability (?) needs to be tested
+                logsum = torch.logsumexp(\
+                    q_t_n /self.entropy_tau, 1).unsqueeze(-1) #logsum trick
+                assert logsum.shape == (self.BATCH_SIZE, 1), "log pi next has wrong shape: {}".format(logsum.shape)
+                tau_log_pi_next = (q_t_n  - self.entropy_tau*logsum)
+                
+                pi_target = F.softmax(q_t_n/self.entropy_tau, dim=1)
+                # in the original paper for munchausen RL they summed over all actions - we only predict the best Qvalue so we will not sum over all actions
+                Q_target = (self.GAMMA**self.n_step * (pi_target * (q_t_n-tau_log_pi_next)*(1 - dones)))
+                assert Q_target.shape == (self.BATCH_SIZE, self.action_size), "has shape: {}".format(Q_target.shape)
+
+                q_k_target = self.critic_target(states, actions)
+                tau_log_pik = q_k_target - self.entropy_tau*torch.logsumexp(\
+                                                                        q_k_target/self.entropy_tau, 1).unsqueeze(-1)
+                assert tau_log_pik.shape == (self.BATCH_SIZE, self.action_size), "shape instead is {}".format(tau_log_pik.shape)
+                # calc munchausen reward:
+                munchausen_reward = (rewards + self.alpha*torch.clamp(tau_log_pik, min=self.lo, max=0))
+                assert munchausen_reward.shape == (self.BATCH_SIZE, self.action_size)
+                # Compute Q targets for current states 
+                Q_targets = munchausen_reward + Q_target
         # Compute critic loss
         Q_expected = self.critic_local(states, actions)
         if self.per:
@@ -227,17 +257,46 @@ class Agent():
             # Get predicted next-state actions and Q values from target models
 
             # Get max predicted Q values (for next states) from target model
-            with torch.no_grad():
-                next_actions = self.actor_local(next_states)
-                Q_targets_next, _ = self.critic_target(next_states, next_actions, self.N)
-                Q_targets_next = Q_targets_next.transpose(1,2)
-            # Compute Q targets for current states 
-            Q_targets = rewards.unsqueeze(-1) + (self.GAMMA**self.n_step * Q_targets_next.to(self.device) * (1. - dones.unsqueeze(-1)))
+            if not self.munchausen:
+                with torch.no_grad():
+                    next_actions = self.actor_local(next_states)
+                    Q_targets_next, _ = self.critic_target(next_states, next_actions, self.N)
+                    Q_targets_next = Q_targets_next.transpose(1,2)
+                # Compute Q targets for current states 
+                Q_targets = rewards.unsqueeze(-1) + (self.GAMMA**self.n_step * Q_targets_next.to(self.device) * (1. - dones.unsqueeze(-1)))
+            else:
+                with torch.no_grad():
+                    #### CHECK FOR THE SHAPES!!
+                    actions_next = self.actor_target(next_states.to(self.device))
+                    Q_targets_next, _ = self.critic_target(next_states.to(self.device), actions_next.to(self.device), self.N)
+
+                    q_t_n = Q_targets_next.mean(1)
+                    # calculate log-pi - in the paper they subtracted the max_Q value from the Q to ensure stability since we only predict the max value we dont do that
+                    # this might cause some instability (?) needs to be tested
+                    logsum = torch.logsumexp(\
+                        q_t_n /self.entropy_tau, 1).unsqueeze(-1) #logsum trick
+                    assert logsum.shape == (self.BATCH_SIZE, 1), "log pi next has wrong shape: {}".format(logsum.shape)
+                    tau_log_pi_next = (q_t_n  - self.entropy_tau*logsum).unsqueeze(1)
+                    
+                    pi_target = F.softmax(q_t_n/self.entropy_tau, dim=1).unsqueeze(1)
+                    # in the original paper for munchausen RL they summed over all actions - we only predict the best Qvalue so we will not sum over all actions
+                    Q_target = (self.GAMMA**self.n_step * (pi_target * (Q_targets_next-tau_log_pi_next)*(1 - dones.unsqueeze(-1)))).transpose(1,2)
+                    assert Q_target.shape == (self.BATCH_SIZE, self.action_size, self.N), "has shape: {}".format(Q_target.shape)
+
+                    q_k_target = self.critic_target.get_qvalues(states, actions)
+                    tau_log_pik = q_k_target - self.entropy_tau*torch.logsumexp(\
+                                                                            q_k_target/self.entropy_tau, 1).unsqueeze(-1)
+                    assert tau_log_pik.shape == (self.BATCH_SIZE, self.action_size), "shape instead is {}".format(tau_log_pik.shape)
+                    # calc munchausen reward:
+                    munchausen_reward = (rewards + self.alpha*torch.clamp(tau_log_pik, min=self.lo, max=0)).unsqueeze(-1)
+                    assert munchausen_reward.shape == (self.BATCH_SIZE, self.action_size, 1)
+                    # Compute Q targets for current states 
+                    Q_targets = munchausen_reward + Q_target
             # Get expected Q values from local model
             Q_expected, taus = self.critic_local(states, actions, self.N)
             assert Q_targets.shape == (self.BATCH_SIZE, 1, self.N)
             assert Q_expected.shape == (self.BATCH_SIZE, self.N, 1)
-
+    
             # Quantile Huber loss
             td_error = Q_targets - Q_expected
             assert td_error.shape == (self.BATCH_SIZE, self.N, self.N), "wrong td error shape"

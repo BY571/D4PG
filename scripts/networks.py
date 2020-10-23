@@ -108,7 +108,7 @@ class IQN(nn.Module):
         x = self.head(x)
         return x.flatten().shape[0]
         
-    def calc_cos(self, batch_size, n_tau=8):
+    def calc_cos(self, batch_size, n_tau=32):
         """
         Calculating the cosinus values depending on the number of tau samples
         """
@@ -118,7 +118,7 @@ class IQN(nn.Module):
         assert cos.shape == (batch_size,n_tau,self.n_cos), "cos shape is incorrect"
         return cos, taus
     
-    def forward(self, input, action, num_tau=8):
+    def forward(self, input, action, num_tau=32):
         """
         Quantile Calculation depending on the number of tau
         

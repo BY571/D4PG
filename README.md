@@ -6,9 +6,9 @@ Added already:
 - N-Step Bootstrapping
 - D2RL
 - Distributional IQN Critic
+- munchausen RL
 
 TODO:
-- add munchausen RL
 - test runs for Pendulum and LunarLanderContinuous
 - compare critic loss of base and iqn agent!
 
