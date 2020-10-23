@@ -129,7 +129,7 @@ class IQN(nn.Module):
         """
         batch_size = input.shape[0]
         x = torch.cat((input, action), dim=1)
-        x = torch.relu(self.head(x))
+        x = torch.relu(self.head(x  ))
         
         cos, taus = self.calc_cos(batch_size, num_tau) # cos shape (batch, num_tau, layer_size)
         cos = cos.view(batch_size*num_tau, self.n_cos)
@@ -137,6 +137,14 @@ class IQN(nn.Module):
         
         # x has shape (batch, layer_size) for multiplication –> reshape to (batch, 1, layer)
         x = (x.unsqueeze(1)*cos_x).view(batch_size*num_tau, self.layer_size)  #batch_size*num_tau, self.cos_layer_out
+        # Following reshape and transpose is done to bring the action in the same shape as batch*tau:
+        # first 32 entries are tau for each action -> thats why each action one needs to be repeated 32 times 
+        # x = [[tau1   action = [[a1
+        #       tau1              a1   
+        #        ..               ..
+        #       tau2              a2
+        #       tau2              a2
+        #       ..]]              ..]]  
         #action = action.repeat(num_tau,1).reshape(num_tau,batch_size*self.action_size).transpose(0,1).reshape(batch_size*num_tau,self.action_size)
         #x = torch.cat((x,action),dim=1)
         x = torch.relu(self.ff_1(x))
