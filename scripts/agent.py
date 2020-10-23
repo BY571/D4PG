@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
-from .networks import Actor, Critic, DeepActor, DeepCritic, IQN
+from .networks import Actor, Critic, DeepActor, DeepCritic, IQN, DeepIQN
 from .replay_buffer import ReplayBuffer, PrioritizedReplay
 import numpy as np
 import random
@@ -52,8 +52,9 @@ class Agent():
         self.BATCH_SIZE = BATCH_SIZE
         self.per = per
         self.munchausen = munchausen
-        self.n_step =n_step
+        self.n_step = n_step
         self.distributional = distributional
+        self.D2RL = D2RL
         self.GAMMA = GAMMA
         self.TAU = TAU
         self.LEARN_EVERY = LEARN_EVERY
@@ -72,17 +73,32 @@ class Agent():
         print("Using: ", device)
         
         # Actor Network (w/ Target Network)
-        self.actor_local = Actor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
-        self.actor_target = Actor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
+        if not self.D2RL:
+            self.actor_local = Actor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
+            self.actor_target = Actor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
+        else:
+            self.actor_local = DeepActor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
+            self.actor_target = DeepActor(state_size, action_size, random_seed, hidden_size=hidden_size).to(device)
+
         self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=LR_ACTOR)
 
         # Critic Network (w/ Target Network)
         if self.distributional:
-            self.critic_local = IQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
-            self.critic_target = IQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
+            if not self.D2RL:
+                self.critic_local = IQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
+                self.critic_target = IQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
+            else:
+                self.critic_local = DeepIQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
+                self.critic_target = DeepIQN(state_size, action_size, layer_size=hidden_size, device=device, seed=random_seed, dueling=None, N=self.N).to(device)
         else:
-            self.critic_local = Critic(state_size, action_size, random_seed).to(device)
-            self.critic_target = Critic(state_size, action_size, random_seed).to(device)
+            if not self.D2RL:
+                self.critic_local = Critic(state_size, action_size, random_seed).to(device)
+                self.critic_target = Critic(state_size, action_size, random_seed).to(device)
+            else:
+                self.critic_local = DeepCritic(state_size, action_size, random_seed).to(device)
+                self.critic_target = DeepCritic(state_size, action_size, random_seed).to(device)
+
+        
         self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=LR_CRITIC, weight_decay=WEIGHT_DECAY)
 
         print("Actor: \n", self.actor_local)
@@ -109,7 +125,7 @@ class Agent():
             self.learn = self.learn_
 
         print("Using PER: ", per)    
-
+        print("Using Munchausen RL: ", munchausen)
     def step(self, state, action, reward, next_state, done, timestamp, writer):
         """Save experience in replay memory, and use random sample from buffer to learn."""
         # Save experience / reward
