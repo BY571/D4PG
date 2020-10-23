@@ -41,7 +41,7 @@ TODO:
 ## Results 
 ### Environment: Pendulum
 
-![Pendulum](imgs/D4PG_Improvements.jpg)
+![Pendulum](imgs/D4PG_Improvements.png)
 
 Below you can see how IQN reduced the variance of the Critic loss:
 
