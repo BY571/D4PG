@@ -128,6 +128,7 @@ class IQN(nn.Module):
         
         """
         batch_size = input.shape[0]
+
         x = torch.cat((input, action), dim=1)
         x = torch.relu(self.head(x  ))
         

@@ -144,7 +144,7 @@ class Agent():
         """Returns actions for given state as per current policy."""
         state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
 
-        assert state.shape == (1,3), "shape: {}".format(state.shape)
+        assert state.shape == (1,self.state_size), "shape: {}".format(state.shape)
         self.actor_local.eval()
         with torch.no_grad():
                 action = self.actor_local(state).cpu().data.numpy().squeeze(0)
@@ -195,15 +195,15 @@ class Agent():
                 pi_target = F.softmax(q_t_n/self.entropy_tau, dim=1)
                 # in the original paper for munchausen RL they summed over all actions - we only predict the best Qvalue so we will not sum over all actions
                 Q_target = (self.GAMMA**self.n_step * (pi_target * (q_t_n-tau_log_pi_next)*(1 - dones)))
-                assert Q_target.shape == (self.BATCH_SIZE, self.action_size), "has shape: {}".format(Q_target.shape)
+                assert Q_target.shape == (self.BATCH_SIZE, 1), "has shape: {}".format(Q_target.shape)
 
                 q_k_target = self.critic_target(states, actions)
                 tau_log_pik = q_k_target - self.entropy_tau*torch.logsumexp(\
                                                                         q_k_target/self.entropy_tau, 1).unsqueeze(-1)
-                assert tau_log_pik.shape == (self.BATCH_SIZE, self.action_size), "shape instead is {}".format(tau_log_pik.shape)
+                assert tau_log_pik.shape == (self.BATCH_SIZE, 1), "shape instead is {}".format(tau_log_pik.shape)
                 # calc munchausen reward:
                 munchausen_reward = (rewards + self.alpha*torch.clamp(tau_log_pik, min=self.lo, max=0))
-                assert munchausen_reward.shape == (self.BATCH_SIZE, self.action_size)
+                assert munchausen_reward.shape == (self.BATCH_SIZE, 1)
                 # Compute Q targets for current states 
                 Q_targets = munchausen_reward + Q_target
         # Compute critic loss

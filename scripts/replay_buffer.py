@@ -103,7 +103,7 @@ class PrioritizedReplay(object):
         assert state.ndim == next_state.ndim
         state      = np.expand_dims(state, 0)
         next_state = np.expand_dims(next_state, 0)
-        action = torch.from_numpy(action)
+        action = torch.from_numpy(action).unsqueeze(0)
 
         # n_step calc
         self.n_step_buffer.append((state, action, reward, next_state, done))
@@ -145,7 +145,7 @@ class PrioritizedReplay(object):
 
         states      = torch.FloatTensor(np.float32(np.concatenate(states))).to(self.device)
         next_states = torch.FloatTensor(np.float32(np.concatenate(next_states))).to(self.device)
-        actions     = torch.cat(actions).to(self.device).unsqueeze(1)
+        actions     = torch.cat(actions).to(self.device)
         rewards     = torch.FloatTensor(rewards).to(self.device).unsqueeze(1) 
         dones       = torch.FloatTensor(dones).to(self.device).unsqueeze(1)
         weights    = torch.FloatTensor(weights).unsqueeze(1)
