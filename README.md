@@ -34,9 +34,6 @@ Added Extensions:
 - Distributional IQN Critic [X]
 - Munchausen RL [X]
 
-TODO:
-- test runs for Pendulum and LunarLanderContinuous
-- compare critic loss of base and iqn agent!
 
 ## Results 
 ### Environment: Pendulum
