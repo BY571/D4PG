@@ -8,6 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 import argparse
 #from  files import MultiPro
 from scripts.agent import Agent
+import json
 
 def evaluate(frame, eval_runs=5, capture=False, render=False):
     """
@@ -80,7 +81,6 @@ def run(frames=1000, eval_every=1000, eval_runs=5, worker=1):
 parser = argparse.ArgumentParser(description="")
 parser.add_argument("-env", type=str,default="Pendulum-v0", help="Environment name, default = Pendulum-v0")
 parser.add_argument("-nstep", type=int, default=1, help ="Nstep bootstrapping, default 1")
-parser.add_argument("-dueling", type=int, choices=[0,1], default=0, help="Dueling Q-Network, default = 0")
 parser.add_argument("-per", type=int, default=0, choices=[0,1], help="Adding Priorizied Experience Replay to the agent if set to 1, default = 0")
 parser.add_argument("-munchausen", type=int, default=0, choices=[0,1], help="Adding Munchausen RL to the agent if set to 1, default = 0")
 parser.add_argument("-iqn", type=int, choices=[0,1], default=0, help="Use distributional IQN Critic if set to 1, default = 1")
@@ -101,7 +101,7 @@ parser.add_argument("-bs", "--batch_size", type=int, default=256, help="Batch si
 parser.add_argument("-t", "--tau", type=float, default=1e-2, help="Softupdate factor tau, default is 1e-3") #for per 1e-2 for regular 1e-3 -> Pendulum!
 parser.add_argument("-g", "--gamma", type=float, default=0.99, help="discount factor gamma, default is 0.99")
 parser.add_argument("--saved_model", type=str, default=None, help="Load a saved model to perform a test run!")
-parser.add_argument("-w", "--worker", type=int, default=1, help="Number of parallel worker, default = 1")
+
 args = parser.parse_args()
 
 if __name__ == "__main__":
@@ -146,6 +146,12 @@ if __name__ == "__main__":
         run(frames = args.frames,
             eval_every=args.eval_every,
             eval_runs=args.eval_runs)
+
     t1 = time.time()
     eval_env.close()
     print("training took {} min!".format((t1-t0)/60))
+    # save trained model 
+    torch.save(agent.actor_local.state_dict(), 'runs/'+args.info+".pth")
+    # save parameter
+    with open('runs/'+args.info+".json", 'w') as f:
+        json.dump(args.__dict__, f, indent=2)
