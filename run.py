@@ -61,7 +61,7 @@ def run(frames=1000, eval_every=1000, eval_runs=5, worker=1):
     for frame in range(1, frames+1):
         # evaluation runs
         if frame % eval_every == 0 or frame == 1:
-            evaluate(frame, eval_runs)
+            evaluate(frame*worker, eval_runs)
 
         action = agent.act(state)
         action_v = np.clip(action*action_high, action_low, action_high)
@@ -108,7 +108,7 @@ parser.add_argument("-learn_number", type=int, default=1, help="Learn x times pe
 parser.add_argument("-layer_size", type=int, default=256, help="Number of nodes per neural network layer, default is 256")
 parser.add_argument("-repm", "--replay_memory", type=int, default=int(1e6), help="Size of the Replay memory, default is 1e6")
 parser.add_argument("-bs", "--batch_size", type=int, default=256, help="Batch size, default is 256")
-parser.add_argument("-t", "--tau", type=float, default=1e-2, help="Softupdate factor tau, default is 1e-3") #for per 1e-2 for regular 1e-3 -> Pendulum!
+parser.add_argument("-t", "--tau", type=float, default=1e-3, help="Softupdate factor tau, default is 1e-3") #for per 1e-2 for regular 1e-3 -> Pendulum!
 parser.add_argument("-g", "--gamma", type=float, default=0.99, help="discount factor gamma, default is 0.99")
 parser.add_argument("-w", "--worker", type=int, default=1, help="Number of parallel environments, default = 1")
 parser.add_argument("--saved_model", type=str, default=None, help="Load a saved model to perform a test run!")
