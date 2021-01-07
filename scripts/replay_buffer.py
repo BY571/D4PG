@@ -7,7 +7,7 @@ from collections import namedtuple, deque
 class ReplayBuffer:
     """Fixed-size buffer to store experience tuples."""
 
-    def __init__(self, buffer_size, batch_size, n_step, device, seed, gamma):
+    def __init__(self, buffer_size, batch_size, n_step, parallel_env, device, seed, gamma):
         """Initialize a ReplayBuffer object.
         Params
         ======
@@ -21,18 +21,22 @@ class ReplayBuffer:
         self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done"])
         self.seed = random.seed(seed)
         self.gamma = gamma
-        self.n_step_buffer = deque(maxlen=n_step) 
-        self.iter_ = 0
+        self.parallel_env = parallel_env
         self.n_step = n_step
+        self.n_step_buffer = [deque(maxlen=self.n_step) for i in range(parallel_env)]
+        self.iter_ = 0
+
 
     def add(self, state, action, reward, next_state, done):
         """Add a new experience to memory."""
-
-        self.n_step_buffer.append((state, action, reward, next_state, done))
-        if len(self.n_step_buffer) == self.n_step:
-            state, action, reward, next_state, done = self.calc_multistep_return(self.n_step_buffer)
+        if self.iter_ == self.parallel_env:
+            self.iter_ = 0
+        self.n_step_buffer[self.iter_].append((state, action, reward, next_state, done))
+        if len(self.n_step_buffer[self.iter_]) == self.n_step:
+            state, action, reward, next_state, done = self.calc_multistep_return(self.n_step_buffer[self.iter_])
             e = self.experience(state, action, reward, next_state, done)
             self.memory.append(e)
+        self.iter_ += 1
 
 
 
@@ -65,7 +69,7 @@ class PrioritizedReplay(object):
     """
     Proportional Prioritization
     """
-    def __init__(self, capacity, batch_size, device, seed, gamma=0.99, n_step=1, alpha=0.6, beta_start = 0.4, beta_frames=100000):
+    def __init__(self, capacity, batch_size, device, seed, gamma=0.99, n_step=1, parallel_env=1, alpha=0.6, beta_start = 0.4, beta_frames=100000):
         self.alpha = alpha
         self.beta_start = beta_start
         self.beta_frames = beta_frames
@@ -77,7 +81,9 @@ class PrioritizedReplay(object):
         self.pos        = 0
         self.priorities = deque(maxlen=capacity)
         self.seed = np.random.seed(seed)
-        self.n_step_buffer = deque(maxlen=n_step)
+        self.parallel_env = parallel_env
+        self.n_step_buffer = [deque(maxlen=self.n_step) for i in range(parallel_env)]
+        self.iter_ = 0
         self.n_step = n_step
         self.gamma = gamma
 
@@ -100,22 +106,24 @@ class PrioritizedReplay(object):
         return min(1.0, self.beta_start + frame_idx * (1.0 - self.beta_start) / self.beta_frames)
     
     def add(self, state, action, reward, next_state, done):
+        if self.iter_ == self.parallel_env:
+            self.iter_ = 0
         assert state.ndim == next_state.ndim
         state      = np.expand_dims(state, 0)
         next_state = np.expand_dims(next_state, 0)
         action = torch.from_numpy(action).unsqueeze(0)
 
         # n_step calc
-        self.n_step_buffer.append((state, action, reward, next_state, done))
-        if len(self.n_step_buffer) == self.n_step:
-            state, action, reward, next_state, done = self.calc_multistep_return(self.n_step_buffer)
+        self.n_step_buffer[self.iter_].append((state, action, reward, next_state, done))
+        if len(self.n_step_buffer[self.iter_]) == self.n_step:
+            state, action, reward, next_state, done = self.calc_multistep_return(self.n_step_buffer[self.iter_])
 
         max_prio = np.array(self.priorities, dtype=float).max() if self.buffer else 1.0 # gives max priority if buffer is not empty else 1
         
 
         self.buffer.append((state, action, reward, next_state, done))
         self.priorities.append(max_prio)
-
+        self.iter_ += 1
 
         
     def sample(self):

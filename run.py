@@ -8,11 +8,19 @@ from torch.utils.tensorboard import SummaryWriter
 import argparse
 #from  files import MultiPro
 from scripts.agent import Agent
+from  scripts import MultiPro
 import json
+
+def timer(start,end):
+    """ Helper to print training time """
+    hours, rem = divmod(end-start, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print("\nTraining Time:  {:0>2}:{:0>2}:{:05.2f}".format(int(hours),int(minutes),seconds))
+
 
 def evaluate(frame, eval_runs=5, capture=False, render=False):
     """
-    Makes an evaluation run with the current epsilon
+    Makes an evaluation run 
     """
 
     reward_batch = []
@@ -21,16 +29,17 @@ def evaluate(frame, eval_runs=5, capture=False, render=False):
         if render: eval_env.render()
         rewards = 0
         while True:
-            action = agent.act(state)
+            action = agent.act(np.expand_dims(state, axis=0))
             action_v = np.clip(action*action_high, action_low, action_high)
-            state, reward, done, _ = eval_env.step(action_v)
+
+            state, reward, done, _ = eval_env.step(action_v[0])
             rewards += reward
             if done:
                 break
         reward_batch.append(rewards)
     if capture == False:   
         writer.add_scalar("Reward", np.mean(reward_batch), frame)
-    return np.mean(reward_batch)
+
 
 
 def run(frames=1000, eval_every=1000, eval_runs=5, worker=1):
@@ -47,31 +56,32 @@ def run(frames=1000, eval_every=1000, eval_runs=5, worker=1):
     scores = []                        # list containing scores from each episode
     scores_window = deque(maxlen=100)  # last 100 scores
     i_episode = 1
-    state = env.reset()
+    state = envs.reset()
     score = 0    
     for frame in range(1, frames+1):
         # evaluation runs
         if frame % eval_every == 0 or frame == 1:
-            eval_reward = evaluate(frame, eval_runs)
+            evaluate(frame, eval_runs)
 
         action = agent.act(state)
         action_v = np.clip(action*action_high, action_low, action_high)
-        next_state, reward, done, _ = env.step(action_v) #returns np.stack(obs), np.stack(action) ...
+        next_state, reward, done, _ = envs.step(action_v) #returns np.stack(obs), np.stack(action) ...
 
-        agent.step(state, action, reward, next_state, done, frame, writer)
+        for s, a, r, ns, d in zip(state, action, reward, next_state, done):
+            agent.step(s, a, r, ns, d, frame, writer)
         
         state = next_state
         score += reward
         
-        if done:
+        if done.any():
             scores_window.append(score)       # save most recent score
             scores.append(score)              # save most recent score
             writer.add_scalar("Average100", np.mean(scores_window), frame*worker)
-            print('\rEpisode {}\tFrame {} \tAverage100 Score: {:.2f}'.format(i_episode, frame, np.mean(scores_window)), end="")
+            print('\rEpisode {}\tFrame {} \tAverage100 Score: {:.2f}'.format(i_episode*worker, frame*worker, np.mean(scores_window)), end="")
             #if i_episode % 100 == 0:
             #    print('\rEpisode {}\tFrame \tReward: {}\tAverage100 Score: {:.2f}'.format(i_episode*worker, frame*worker, round(eval_reward,2), np.mean(scores_window)), end="", flush=True)
             i_episode +=1 
-            state = env.reset()
+            state = envs.reset()
             score = 0
             
 
@@ -100,6 +110,7 @@ parser.add_argument("-repm", "--replay_memory", type=int, default=int(1e6), help
 parser.add_argument("-bs", "--batch_size", type=int, default=256, help="Batch size, default is 256")
 parser.add_argument("-t", "--tau", type=float, default=1e-2, help="Softupdate factor tau, default is 1e-3") #for per 1e-2 for regular 1e-3 -> Pendulum!
 parser.add_argument("-g", "--gamma", type=float, default=0.99, help="discount factor gamma, default is 0.99")
+parser.add_argument("-w", "--worker", type=int, default=1, help="Number of parallel environments, default = 1")
 parser.add_argument("--saved_model", type=str, default=None, help="Load a saved model to perform a test run!")
 
 args = parser.parse_args()
@@ -113,16 +124,16 @@ if __name__ == "__main__":
     TAU = args.tau
     HIDDEN_SIZE = args.layer_size
     BUFFER_SIZE = int(args.replay_memory)
-    BATCH_SIZE = args.batch_size 
+    BATCH_SIZE = args.batch_size * args.worker
     LR_ACTOR = args.lr_a         # learning rate of the actor 
     LR_CRITIC = args.lr_c        # learning rate of the critic
     saved_model = args.saved_model
     D2RL = args.d2rl
 
     writer = SummaryWriter("runs/"+args.info)
-    env = gym.make(args.env)
+    envs = MultiPro.SubprocVecEnv([lambda: gym.make(args.env) for i in range(args.worker)])
     eval_env = gym.make(args.env)
-    env.seed(seed)
+    envs.seed(seed)
     eval_env.seed(seed+1)
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -136,20 +147,21 @@ if __name__ == "__main__":
     action_size = eval_env.action_space.shape[0]
     agent = Agent(state_size=state_size, action_size=action_size, n_step=args.nstep, per=args.per, munchausen=args.munchausen,distributional=args.iqn,
                  D2RL=D2RL, noise_type=args.noise, random_seed=seed, hidden_size=HIDDEN_SIZE, BATCH_SIZE=BATCH_SIZE, BUFFER_SIZE=BUFFER_SIZE, GAMMA=GAMMA,
-                 LR_ACTOR=LR_ACTOR, LR_CRITIC=LR_CRITIC, TAU=TAU, LEARN_EVERY=args.learn_every, LEARN_NUMBER=args.learn_number, device=device, frames=args.frames) 
+                 LR_ACTOR=LR_ACTOR, LR_CRITIC=LR_CRITIC, TAU=TAU, LEARN_EVERY=args.learn_every, LEARN_NUMBER=args.learn_number, device=device, frames=args.frames, worker=args.worker) 
     
     t0 = time.time()
     if saved_model != None:
         agent.actor_local.load_state_dict(torch.load(saved_model))
         evaluate(frame=None, capture=False)
     else:    
-        run(frames = args.frames,
-            eval_every=args.eval_every,
-            eval_runs=args.eval_runs)
+        run(frames = args.frames//args.worker,
+            eval_every=args.eval_every//args.worker,
+            eval_runs=args.eval_runs,
+            worker=args.worker)
 
     t1 = time.time()
     eval_env.close()
-    print("training took {} min!".format((t1-t0)/60))
+    timer(t0, t1)
     # save trained model 
     torch.save(agent.actor_local.state_dict(), 'runs/'+args.info+".pth")
     # save parameter

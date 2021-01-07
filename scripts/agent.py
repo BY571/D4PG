@@ -36,7 +36,8 @@ class Agent():
                       EPSILON = 1.0,
                       EPSILON_DECAY = 1,
                       device = "cuda",
-                      frames = 100000
+                      frames = 100000,
+                      worker=1
                       ):
         """Initialize an Agent object.
         
@@ -114,10 +115,10 @@ class Agent():
         print("Use Noise: ", noise_type)
         # Replay memory
         if per:
-            self.memory = PrioritizedReplay(BUFFER_SIZE, BATCH_SIZE, device=device, seed=random_seed, gamma=GAMMA, n_step=n_step, beta_frames=frames)
+            self.memory = PrioritizedReplay(BUFFER_SIZE, BATCH_SIZE, device=device, seed=random_seed, gamma=GAMMA, n_step=n_step, parallel_env=worker, beta_frames=frames)
 
         else:
-            self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, n_step=n_step, device=device, seed=random_seed, gamma=GAMMA)
+            self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, n_step=n_step, parallel_env=worker, device=device, seed=random_seed, gamma=GAMMA)
         
         if distributional:
             self.learn = self.learn_distribution
@@ -142,12 +143,12 @@ class Agent():
 
     def act(self, state, add_noise=True):
         """Returns actions for given state as per current policy."""
-        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+        state = torch.from_numpy(state).float().to(self.device)
 
-        assert state.shape == (1,self.state_size), "shape: {}".format(state.shape)
+        assert state.shape == (state.shape[0],self.state_size), "shape: {}".format(state.shape)
         self.actor_local.eval()
         with torch.no_grad():
-                action = self.actor_local(state).cpu().data.numpy().squeeze(0)
+                action = self.actor_local(state).cpu().data.numpy()
         self.actor_local.train()
         if add_noise:
             if self.noise_type == "ou":

@@ -33,7 +33,7 @@ Added Extensions:
 - D2RL [X]
 - Distributional IQN Critic [X]
 - Munchausen RL [X]
-
+- Parallel-Environments [X]
 
 ## Results 
 ### Environment: Pendulum
