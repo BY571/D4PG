@@ -82,9 +82,10 @@ class PrioritizedReplay(object):
         self.priorities = deque(maxlen=capacity)
         self.seed = np.random.seed(seed)
         self.parallel_env = parallel_env
+        self.n_step = n_step
         self.n_step_buffer = [deque(maxlen=self.n_step) for i in range(parallel_env)]
         self.iter_ = 0
-        self.n_step = n_step
+        
         self.gamma = gamma
 
     def calc_multistep_return(self,n_step_buffer):
