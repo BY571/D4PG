@@ -7,6 +7,7 @@ from .replay_buffer import ReplayBuffer, PrioritizedReplay
 import numpy as np
 import random
 import copy
+from .ICM import ICM, Inverse, Forward
 
 # TODO: Check for batch norm comparison! batch norm seems to have a big impact on final performance
 #       Also check if normal gaussian noise is enough. -> D4PG paper says there is no difference maybe chooseable parameter for the implementation
@@ -22,6 +23,7 @@ class Agent():
                       distributional,
                       D2RL,
                       noise_type,
+                      curiosity,
                       random_seed,
                       hidden_size,
                       BUFFER_SIZE = int(1e6),  # replay buffer size
@@ -56,6 +58,8 @@ class Agent():
         self.n_step = n_step
         self.distributional = distributional
         self.D2RL = D2RL
+        self.curiosity = curiosity[0]
+        self.reward_addon = curiosity[1]
         self.GAMMA = GAMMA
         self.TAU = TAU
         self.LEARN_EVERY = LEARN_EVERY
@@ -70,6 +74,8 @@ class Agent():
         self.entropy_tau = 0.03
         self.lo = -1
         self.alpha = 0.9
+        
+        self.eta = torch.FloatTensor([.1]).to(device)
         
         print("Using: ", device)
         
@@ -105,6 +111,12 @@ class Agent():
         print("Actor: \n", self.actor_local)
         print("\nCritic: \n", self.critic_local)
 
+        if self.curiosity != 0:
+            inverse_m = Inverse(self.state_size, self.action_size)
+            forward_m = Forward(self.state_size, self.action_size, inverse_m.calc_input_layer(), device=device)
+            self.icm = ICM(inverse_m, forward_m, device=device)#.to(device)
+            print(inverse_m, forward_m)
+            
         # Noise process
         self.noise_type = noise_type
         if noise_type == "ou":
@@ -127,6 +139,7 @@ class Agent():
 
         print("Using PER: ", per)    
         print("Using Munchausen RL: ", munchausen)
+        
     def step(self, state, action, reward, next_state, done, timestamp, writer):
         """Save experience in replay memory, and use random sample from buffer to learn."""
         # Save experience / reward
@@ -140,6 +153,8 @@ class Agent():
                 losses = self.learn(experiences, self.GAMMA)
             writer.add_scalar("Critic_loss", losses[0], timestamp)
             writer.add_scalar("Actor_loss", losses[1], timestamp)
+            if self.curiosity:
+                writer.add_scalar("ICM_loss", losses[2], timestamp)
 
     def act(self, state, add_noise=True):
         """Returns actions for given state as per current policy."""
@@ -173,6 +188,17 @@ class Agent():
             gamma (float): discount factor
         """
         states, actions, rewards, next_states, dones, idx, weights = experiences
+        icm_loss = 0
+        # calculate curiosity
+        if self.curiosity:
+            icm_loss, forward_pred_err = self.icm.calc_errors(state1=states, state2=next_states, action=actions)
+            r_i = self.eta * forward_pred_err
+            assert r_i.shape == rewards.shape, "r_ and r_e have not the same shape"
+            
+            if self.reward_addon == 1:
+                rewards += r_i.detach()
+            else:
+                rewards = r_i.detach()
 
         # ---------------------------- update critic ---------------------------- #
         if not self.munchausen:
@@ -239,7 +265,7 @@ class Agent():
         self.epsilon *= self.EPSILON_DECAY
         
         if self.noise_type == "ou": self.noise.reset()
-        return critic_loss.detach().cpu().numpy(), actor_loss.detach().cpu().numpy()
+        return critic_loss.detach().cpu().numpy(), actor_loss.detach().cpu().numpy(), icm_loss
 
     
     def soft_update(self, local_model, target_model):
