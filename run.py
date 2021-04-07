@@ -31,7 +31,7 @@ def evaluate(frame, eval_runs=5, capture=False, render=False):
         rewards = 0
         while True:
             action = agent.act(np.expand_dims(state, axis=0))
-            action_v = np.clip(action*action_high, action_low, action_high)
+            action_v = np.clip(action, action_low, action_high)
 
             state, reward, done, _ = eval_env.step(action_v[0])
             rewards += reward
@@ -58,19 +58,23 @@ def run(frames=1000, eval_every=1000, eval_runs=5, worker=1):
     scores_window = deque(maxlen=100)  # last 100 scores
     i_episode = 1
     state = envs.reset()
-    score = 0    
+    score = 0
+    curiosity_logs = []
     for frame in range(1, frames+1):
         # evaluation runs
         if frame % eval_every == 0 or frame == 1:
             evaluate(frame*worker, eval_runs)
 
         action = agent.act(state)
-        action_v = np.clip(action*action_high, action_low, action_high)
-        next_state, reward, done, _ = envs.step(action_v) #returns np.stack(obs), np.stack(action) ...
+        action_v = np.clip(action, action_low, action_high)
+        next_state, reward, done, _ = envs.step(action_v)
 
         for s, a, r, ns, d in zip(state, action, reward, next_state, done):
             agent.step(s, a, r, ns, d, frame, writer)
-        
+            
+        if args.icm:
+            reward_i = agent.icm.get_intrinsic_reward(state[0], next_state[0], action[0])
+            curiosity_logs.append((frame, reward_i))
         state = next_state
         score += reward
         
@@ -78,12 +82,16 @@ def run(frames=1000, eval_every=1000, eval_runs=5, worker=1):
             scores_window.append(score)       # save most recent score
             scores.append(score)              # save most recent score
             writer.add_scalar("Average100", np.mean(scores_window), frame*worker)
+            for v in curiosity_logs:
+                i, r = v[0], v[1]
+                writer.add_scalar("Intrinsic Reward", r, i)
             print('\rEpisode {}\tFrame {} \tAverage100 Score: {:.2f}'.format(i_episode*worker, frame*worker, np.mean(scores_window)), end="")
             #if i_episode % 100 == 0:
             #    print('\rEpisode {}\tFrame \tReward: {}\tAverage100 Score: {:.2f}'.format(i_episode*worker, frame*worker, round(eval_reward,2), np.mean(scores_window)), end="", flush=True)
             i_episode +=1 
             state = envs.reset()
             score = 0
+            curiosity_logs = []
             
 
 

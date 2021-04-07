@@ -2,6 +2,7 @@ import torch
 import numpy as np 
 import torch.nn as nn 
 import torch.optim as optim
+from torch.distributions import Normal
 from torch.nn.utils import clip_grad_norm_
 
 class Inverse(nn.Module):
@@ -36,7 +37,9 @@ class Inverse(nn.Module):
         x = torch.cat((enc_state, enc_next_state), dim=1)
         x = torch.relu(self.layer1(x))
         x = torch.tanh(self.layer2(x))
-        return x
+        dist = Normal(loc=x, scale=torch.FloatTensor([0.1]).to(x.device))
+        action = dist.sample()
+        return action
 
     
 class Forward(nn.Module):
@@ -83,6 +86,7 @@ class ICM(nn.Module):
         super(ICM, self).__init__()
         self.inverse_model = inverse_model.to(device)
         self.forward_model = forward_model.to(device)
+        self.device = device
         
         self.forward_scale = 1.
         self.inverse_scale = 1e4
@@ -126,3 +130,20 @@ class ICM(nn.Module):
         self.optimizer.step()
       
         return loss.detach().cpu().numpy(), forward_pred_err.detach()
+    
+    def get_intrinsic_reward(self, state, next_state, action):
+        state = torch.from_numpy(state).float().to(self.device).unsqueeze(0)
+        next_state = torch.from_numpy(next_state).float().to(self.device).unsqueeze(0)
+        action = torch.FloatTensor(action).to(self.device).unsqueeze(0)
+
+        with torch.no_grad():
+            enc_state1 = self.inverse_model.encoder(state)
+            enc_state2 = self.inverse_model.encoder(next_state)
+
+            # calc forward error 
+            forward_pred = self.forward_model(enc_state1, action)
+            assert not action.requires_grad, "action should not require grad!"
+            assert forward_pred.shape == enc_state2.shape, "forward_pred and enc_state2 dont have the same shape"
+            forward_pred_err = 1/2 * self.forward_loss(forward_pred, enc_state2.detach()).sum(dim=1).unsqueeze(dim=1)
+        return forward_pred_err
+        
